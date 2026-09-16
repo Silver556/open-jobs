@@ -503,6 +503,15 @@ def cmd_html(a):
     V = np.stack([np.frombuffer(base64.b64decode(j["v"]), dtype=np.float32) for j in jobs])
     assign, G3 = subgroups(V, [j["t"] for j in jobs], [j["c"] for j in jobs])
     for j, g in zip(jobs, assign): j["g3"] = int(g)
+    if a.max_per_subgroup:
+        # Lightweight browser-control view: retain every labelled example so the taste model has its
+        # complete training set, plus a balanced high-similarity sample from every broad role group.
+        keep = {j["k"] for j in jobs if interaction_labels.get(j["k"]) in (0, 1)}
+        for gid in G3:
+            candidates = sorted((j for j in jobs if j["g3"] == gid and j["k"] not in keep), key=lambda j: -j["sim"])
+            keep.update(j["k"] for j in candidates[:a.max_per_subgroup])
+        jobs = [j for j in jobs if j["k"] in keep]
+        print(f"lightweight sort view: {len(jobs):,} jobs (all labels + up to {a.max_per_subgroup} candidates per role group)")
     print(f"{len(G3)} groups over the slice: " + ", ".join(f"{g['size']} {g['label']}" for g in G3.values()))
     # group metadata for the leaves in this slice (labels/exemplars from the manifest)
     try:
@@ -702,7 +711,7 @@ ap = argparse.ArgumentParser(); sub = ap.add_subparsers(dest="cmd", required=Tru
 s = sub.add_parser("embed"); s.add_argument("--file", required=True); s.add_argument("--title"); s.add_argument("--location")
 s = sub.add_parser("groups"); s.add_argument("--k", type=int, default=30); s.add_argument("--min-sim", type=float, default=0.0)
 s = sub.add_parser("fetch"); s.add_argument("--groups"); s.add_argument("--top", type=int, default=12); s.add_argument("--replace", action="store_true", help="overwrite the previous slice instead of unioning the new fetch with it")
-s = sub.add_parser("html"); s.add_argument("--out"); s.add_argument("--jd-chars", type=int, default=4000)
+s = sub.add_parser("html"); s.add_argument("--out"); s.add_argument("--jd-chars", type=int, default=4000); s.add_argument("--max-per-subgroup", type=int)
 s = sub.add_parser("serve"); s.add_argument("--port", type=int, default=8765); s.add_argument("--no-open", action="store_true")
 s = sub.add_parser("enrich"); s.add_argument("--top", type=int, default=300); s.add_argument("--all", action="store_true")
 s = sub.add_parser("rank"); s.add_argument("--labels", default=os.path.join(WORK, "interactions.jsonl"))

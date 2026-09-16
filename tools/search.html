@@ -456,7 +456,7 @@ function render(reset=true,reason=null){const _y=window.scrollY;const sort=$('#s
   if(reset){shown=0;cur=Math.min(cur,Math.max(0,ranked.length-1))}const el=$('#list');el.innerHTML='';
   if(!ranked.length){const d=document.createElement('div');d.className='empty';d.innerHTML='No jobs match. <a href="#">Clear filters</a>';el.appendChild(d);d.querySelector('a').onclick=e=>{e.preventDefault();$('#clearf').click()}}
   const head=(cls,txt,n,extra)=>{const h=document.createElement('div');h.className='sec-h '+cls;h.innerHTML=`${txt} <span class="n">${n.toLocaleString()}</span>${extra?' <span class="hint2">'+extra+'</span>':''}`;return h};
-  const secAll=show==='all';const N=Math.min(secAll?yes.length+un.length:ranked.length,Math.max(shown,60));let i=0;
+  const secAll=show==='all';const N=Math.min(secAll?yes.length+un.length:ranked.length,Math.max(shown,12));let i=0;
   if(secAll&&yes.length){el.appendChild(head('yes','✓ Yes',yes.length,'kept in the order you picked them'));}
   for(;i<N&&i<(secAll?yes.length:(show==='yes'?ranked.length:0));i++)el.appendChild(jobEl(ranked[i],i));
   if(secAll){const simple=sort==='sim';
@@ -496,14 +496,14 @@ function jobEl(j,i){const d=document.createElement('div');const l=st.labels[j.k]
   <div class="jdetail"><div class="meta">${j.s?new Date(j.s).toISOString().slice(0,10)+' · ':''}${esc(j.k.split('/')[0])} · group ${j.g} · <a href="${esc(j.u)}" target="_blank" rel="noopener">open posting ↗</a></div>
   ${j.e?`<div class="meta">${[j.e.seniority,j.e.role_family,j.e.employment_type,(j.e.skills_required||[]).slice(0,8).join(', ')].filter(Boolean).map(esc).join(' · ')}</div>`:''}
   ${j.co_?`<div class="meta">🏢 ${esc(j.co_.name)}${j.co_.industry?' · '+esc(j.co_.industry):''}${j.co_.size?' · '+esc(j.co_.size)+' people':''}${j.co_.hq?' · HQ '+esc(j.co_.hq):''}${j.co_.website?' · <a href="'+esc(j.co_.website)+'" target="_blank" rel="noopener">site ↗</a>':''}</div>`:''}
-  <div class="jd">${esc(jdText(j.jd)||'(no description)')}</div>
+  <div class="jd">${st.opened[j.k]?esc(jdText(j.jd)||'(no description)'):''}</div>
   <div class="jactions"><input class="note" type="text" placeholder="Note to self…" value="${esc(st.notes[j.k]||'')}"><button class="btn ghost sm hideco" title="Hide every posting from this company; kept across re-compiles">✖ Never show ${esc((j.c||'').slice(0,22))} again</button></div></div>`;
   d.onclick=e=>{if(e.target.closest('a')){event({type:'open',key:j.k});return}if(e.target.closest('input,button'))return;cur=i;toggle(j,d)};
   const sb=d.querySelector('.simbtn');if(sb)sb.onclick=e=>{e.stopPropagation();st.simTo=st.simTo===j.k?null:j.k;save();event({type:'similar',key:j.k,title:j.t,on:!!st.simTo});renderChips();render(true,'similar');if(st.simTo)toast(`Ranked section now ordered by similarity to “${j.t.slice(0,40)}”`)};
   d.querySelector('.y').onclick=e=>{e.stopPropagation();cur=i;label(l===1?undefined:1)};d.querySelector('.n').onclick=e=>{e.stopPropagation();cur=i;label(l===0?undefined:0)};
   d.querySelector('.note').onchange=e=>{st.notes[j.k]=e.target.value;save();event({type:'note',key:j.k,text:e.target.value})};d.querySelector('.note').onkeydown=e=>e.stopPropagation();
   d.querySelector('.hideco').onclick=e=>{e.stopPropagation();st.hideCo[boardOf(j)]=j.c||boardOf(j);save();event({type:'hide_company',board:boardOf(j),company:j.c,on:true});renderFacets();render(true,'filter');toast(`Hidden ${j.c}. Undo from the ✖ chip in the toolbar.`)};return d}
-function toggle(j,d){st.opened[j.k]=!st.opened[j.k];save();d.classList.toggle('open',!!st.opened[j.k]);if(st.opened[j.k])event({type:'view',key:j.k,title:j.t,company:j.c});hi(true)}
+function toggle(j,d){st.opened[j.k]=!st.opened[j.k];save();d.classList.toggle('open',!!st.opened[j.k]);if(st.opened[j.k]){const body=d.querySelector('.jd');if(body&&!body.textContent)body.textContent=jdText(j.jd)||'(no description)';event({type:'view',key:j.k,title:j.t,company:j.c})}hi(true)}
 function label(v){const j=ranked[cur];if(!j)return;const nxt=ranked.slice(cur+1).find(x=>st.labels[x.k]===undefined&&x!==j);if(v===undefined)delete st.labels[j.k];else st.labels[j.k]=v;if(st.simTo===j.k&&v!==1)st.simTo=null;save();event({type:'label',key:j.k,value:v??null,title:j.t,company:j.c,location:j.l,score:j.score});refit();render(false,'label');
   const tgt=v===undefined?j:(nxt||j);const ni=ranked.indexOf(tgt);cur=ni>=0?ni:Math.min(cur,ranked.length-1);hi(true)}
 function hi(scroll=false){document.querySelectorAll('.job').forEach((e,i)=>e.classList.toggle('cur',+e.dataset.i===cur));if(!scroll)return;const e=document.querySelector(`.job[data-i="${cur}"]`);e&&e.scrollIntoView({block:'nearest'})}
