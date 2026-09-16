@@ -140,8 +140,10 @@ def parse(location, jd="", title=""):
     if HYBRID_RE.search(loc): remote = "hybrid"
     elif FULL_ONSITE.search(text) and not HYBRID_RE.search(head): remote = "onsite"
     elif ONSITE_REQ.search(text): remote = "hybrid"
-    elif HYBRID_RE.search(head): remote = "hybrid"
     elif out["remote_hint"] or REMOTE_RE.search(loc): remote = "remote"
+    # An explicit Remote location beats generic company-level "remote/hybrid" language in the JD.
+    # Concrete role-specific onsite requirements above still correctly override it.
+    elif HYBRID_RE.search(head): remote = "hybrid"
     elif ONSITE_RE.search(loc) or re.search(r"\b(on-?site|in-?office) (role|position|\d+ days)\b|\bthis (role|position) is (on-?site|in-?office)\b", head): remote = "onsite"
     # a role-specific remote statement in the JD counts anywhere; a company blurb ("remote-first", "fully remote team")
     # counts only when the location isn't a specific city
@@ -162,6 +164,16 @@ if __name__ == "__main__":
 
 # ---- eligibility against the user's stated location preference ----
 RESTRICT_RE = re.compile(r"\b(must (?:be|reside|live|be located|be based)[^.]{0,40}?\b(in|within)\b|(?:only|exclusively) (?:for|open to)? ?(?:candidates|applicants|residents)?[^.]{0,20}?(?:in|based in|located in|from)\b|(?:authori[sz]ed|eligible) to work in|(?:based|located|residing) in|(?:us|u\.s\.|united states)[- ]?(?:only|based)|(?:latam|emea|apac|europe|india|canada|uk)[- ]?only)\b[^.\n]{0,60}", re.I)
+STATE_ALLOW_RE = re.compile(
+    r"\b(?:available|open|hiring|hire|employ|employment)\b[^.\n]{0,180}"
+    r"\b(?:following|these|approved|eligible)\s+(?:u\.?s\.?\s+)?states?\b\s*:?\s*([^.\n]{0,1400})",
+    re.I,
+)
+STATE_EXCLUDE_RE = re.compile(
+    r"\b(?:not available|cannot hire|unable to (?:hire|employ)|excluding|except)\b"
+    r"[^.\n]{0,100}?\b(?:in|from|states?)?\b\s*:?\s*([^.\n]{0,600})",
+    re.I,
+)
 MACRO = {"Latam": {"MX","BR","AR","CO","CL","PE","CR","UY"}, "Emea": {"GB","DE","FR","ES","IT","NL","BE","CH","AT","SE","NO","DK","FI","IE","PL","PT","CZ","HU","RO","GR","UA","TR","IL","AE","SA","QA","EG","ZA","NG","KE","MA"}, "Apac": {"IN","CN","JP","KR","SG","HK","TW","AU","NZ","PH","ID","MY","TH","VN","PK","BD","LK"}, "Europe": {"GB","DE","FR","ES","IT","NL","BE","CH","AT","SE","NO","DK","FI","IE","PL","PT","CZ","HU","RO","GR","UA"}, "Eastern Europe": {"PL","CZ","HU","RO","UA","GR"}, "Western Europe": {"GB","DE","FR","ES","IT","NL","BE","CH","AT","IE","PT"}, "North America": {"US","CA","MX"}, "South America": {"BR","AR","CO","CL","PE","UY"}, "Asia": {"IN","CN","JP","KR","SG","HK","TW","PH","ID","MY","TH","VN","PK","BD","LK"}, "Africa": {"ZA","NG","KE","EG","MA"}}
 
 _PLACE_KEYS = sorted(COUNTRIES.keys(), key=len, reverse=True)
@@ -182,6 +194,27 @@ def find_places(text):
     for k in _MACRO_KEYS:
         if f" {k.lower()} " in t: rs.add(k)
     return cs, rs
+
+def find_state_restrictions(text):
+    """Return explicit US-state allow/exclude lists found in remote-work eligibility language."""
+    def states(fragment):
+        found = set()
+        low = " " + re.sub(r"[^a-z ]+", " ", fragment.lower()) + " "
+        for name in sorted(STATE_BY_NAME, key=len, reverse=True):
+            if f" {name} " in low:
+                found.add(STATE_BY_NAME[name])
+                low = low.replace(f" {name} ", "  ")
+        for code in re.findall(r"\b[A-Z]{2}\b", fragment):
+            if code in US_STATES:
+                found.add(code)
+        return found
+
+    allowed, excluded = set(), set()
+    for match in STATE_ALLOW_RE.finditer(text or ""):
+        allowed |= states(match.group(1))
+    for match in STATE_EXCLUDE_RE.finditer(text or ""):
+        excluded |= states(match.group(1))
+    return allowed, excluded
 
 def _clause_elig(p, j, rm, jd):
     """One preference clause against one job. p = parse(clause), j = parse(job), rm = effective arrangement."""
@@ -228,9 +261,17 @@ def eligibility(pref, location, jd="", title="", arrangement=None):
     None = can't tell. `arrangement` overrides the parsed one (pass the enrichment's when known)."""
     clauses = [c.strip() for c in re.split(r"\bor\b|;|\||/", pref or "", flags=re.I) if c.strip()]
     if not clauses: return None, "no preference"
+    parsed_clauses = [parse(c) for c in clauses]
+    preferred_states = {r for p in parsed_clauses for r in p["regions"] if r in US_STATES}
+    allowed_states, excluded_states = find_state_restrictions((jd or "")[:15000])
+    if preferred_states:
+        if allowed_states and not (preferred_states & allowed_states):
+            return False, f"state eligibility excludes {', '.join(sorted(preferred_states))}"
+        if preferred_states <= excluded_states:
+            return False, f"state eligibility excludes {', '.join(sorted(preferred_states))}"
     j = parse(location or "", jd, title)
     rm = arrangement if arrangement in ("remote", "hybrid", "onsite") else j["remote"]
-    outs = [_clause_elig(parse(c), j, rm, jd) for c in clauses]
+    outs = [_clause_elig(p, j, rm, jd) for p in parsed_clauses]
     for ok, why in outs:
         if ok is True: return True, why
     if any(ok is None for ok, _ in outs): return None, next(why for ok, why in outs if ok is None)

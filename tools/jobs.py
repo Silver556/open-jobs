@@ -112,7 +112,10 @@ def cmd_fetch(a):
     rows = []; total = 0
     for li, leaf in enumerate(leaves):
         p = os.path.join(gdir, f"{leaf['id']}.json")
-        if not os.path.exists(p): open(p, "wb").write(get(f"/data/groups/{leaf['id']}.json", binary=True))
+        # IDs can be reused across daily rebuilds; a cached group from an older manifest is unsafe.
+        manifest_path = os.path.join(WORK, "manifest.json")
+        if not os.path.exists(p) or os.path.getmtime(p) < os.path.getmtime(manifest_path):
+            open(p, "wb").write(get(f"/data/groups/{leaf['id']}.json", binary=True))
         g = json.load(open(p, encoding="utf-8"))
         for j in g["jobs"]:
             vec = np.frombuffer(base64.b64decode(j["v"]), dtype=np.float32)
@@ -235,13 +238,13 @@ def load_jobs():
 LABEL_STORE = "labelled.jsonl"
 
 def load_interaction_labels(path):
-    """Latest yes/no per job key from the append-only interaction log (last write wins; null = removed)."""
+    """Latest yes/no per job key from labels or Sort seeds (last write wins; null = removed)."""
     labels = {}
     if os.path.exists(path):
         for line in open(path, encoding="utf-8"):
             try: e = json.loads(line)
             except Exception: continue
-            if e.get("type") == "label": labels[e["key"]] = e["value"]
+            if e.get("type") in ("label", "seed"): labels[e["key"]] = e["value"]
     return labels
 
 def load_label_store():
@@ -409,7 +412,22 @@ def seniority_model():
 def cmd_html(a):
     d, v = ideal()
     rows = load_jobs()
-    capture_labelled(rows, load_interaction_labels(os.path.join(WORK, "interactions.jsonl")))  # persist labelled jobs (survive rebuilds)
+    interaction_labels = load_interaction_labels(os.path.join(WORK, "interactions.jsonl"))
+    capture_labelled(rows, interaction_labels)  # persist labelled jobs (survive rebuilds)
+    # `rank` writes a reusable model, but older page builds silently ignored it and fell back to the
+    # ideal-JD score until the browser collected its own labels. Carry the saved score into the page
+    # so a freshly compiled page starts in the same order as work/ranked.csv.
+    refit = None
+    model_path = os.path.join(WORK, "model.json")
+    if os.path.exists(model_path):
+        try:
+            model = json.load(open(model_path, encoding="utf-8"))
+            weights = np.asarray(model.get("w"), dtype=np.float32)
+            if model.get("recipe") == d.get("recipe") and weights.shape == v.shape:
+                refit = (weights, float(model.get("b", 0.0)))
+                print(f"using work/model.json as the page's starting ranking ({len(model.get('labels') or {})} labels)")
+        except Exception as e:
+            print(f"(could not load work/model.json: {e})")
     sm = salary_model(); am = arrangement_model(); lt = location_table(); snm = seniority_model(); agm = age_model(); n_est_rm = 0; n_est_co = 0; n_est_sn = 0
     # rows are already deduped by load_jobs() (identical company+title mirrors collapsed)
     # "never show <company> again" clicks are logged as hide_company events; honor the final state at compile time
@@ -472,7 +490,12 @@ def cmd_html(a):
             if agm is not None:
                 agp = round(age_predict(agm, vec), 1)  # typical age (days) for a posting with this content
         comp = (enr["boards"].get(f"{r[0]}/{r[1]}") or {}).get("company")
-        jobs.append({"k": key, "t": r[3], "c": (comp or {}).get("name") or r[4], "l": r[5], "u": r[6], "s": r[7], "p": (r[12] if len(r) > 12 else None), "agp": agp, "jd": r[8][:a.jd_chars], "g": r[9], "sim": round(r[10], 4), "v": r[11],
+        refit_score = None
+        if refit is not None:
+            raw_vec = np.frombuffer(base64.b64decode(r[11]), dtype=np.float32)
+            z = float(np.clip(raw_vec @ refit[0] + refit[1], -30, 30))
+            refit_score = round(1 / (1 + math.exp(-z)), 4)
+        jobs.append({"k": key, "t": r[3], "c": (comp or {}).get("name") or r[4], "l": r[5], "u": r[6], "s": r[7], "p": (r[12] if len(r) > 12 else None), "agp": agp, "jd": r[8][:a.jd_chars], "g": r[9], "sim": round(r[10], 4), "refit": refit_score, "v": r[11],
                      "rm": rm_known, "rme": rme, "coe": coe, "sn": sn, "sne": sne, "co": loc["countries"], "rg": loc["regions"], "ci": loc["cities"],
                      "el": el, "elr": elr, "sal": extract_salary(r[8]), "est": est, "e": e, "co_": comp and {"name": comp.get("name"), "website": comp.get("website"), "industry": comp.get("industry"), "size": comp.get("size_bucket"), "hq": (comp.get("hq_location") or {}).get("country_code"), "staffing": comp.get("is_staffing_agency"), "desc": comp.get("description")}})
     print(f"{sum(1 for j in jobs if j['e'])} jobs and {sum(1 for j in jobs if j['co_'])} with enriched company data")
@@ -499,7 +522,8 @@ def cmd_html(a):
     from locparse import parse as _pp
     _clauses = [c.strip() for c in re.split(r"\bor\b|;|\||/", pref or "", flags=re.I) if c.strip()]
     pref_remote_only = bool(_clauses) and all(_pp(c)["remote"] == "remote" and not _pp(c)["cities"] for c in _clauses)
-    html = TEMPLATE.replace("__PREF_REMOTE_ONLY__", "true" if pref_remote_only else "false").replace("__PREF__", J(pref)).replace("__GROUPS3__", J(G3)).replace("__GROUPS__", J(GROUPS)).replace("__JOBS__", J(jobs)).replace("__IDEAL__", J({"vector": d["vector"], "title": d.get("title"), "recipe": d["recipe"]})).replace("__IDEAL_TEXT__", J(open(d["source"], encoding="utf-8").read() if os.path.exists(d["source"]) else ""))
+    initial_labels = {key: value for key, value in interaction_labels.items() if value in (0, 1)}
+    html = TEMPLATE.replace("__PREF_REMOTE_ONLY__", "true" if pref_remote_only else "false").replace("__PREF__", J(pref)).replace("__GROUPS3__", J(G3)).replace("__GROUPS__", J(GROUPS)).replace("__JOBS__", J(jobs)).replace("__IDEAL__", J({"vector": d["vector"], "title": d.get("title"), "recipe": d["recipe"]})).replace("__IDEAL_TEXT__", J(open(d["source"], encoding="utf-8").read() if os.path.exists(d["source"]) else "")).replace("__INITIAL_LABELS__", J(initial_labels))
     out = a.out or os.path.join(WORK, "search.html")
     open(out, "w", encoding="utf-8").write(html)
     print(f"wrote {out}: {len(jobs):,} jobs ({os.path.getsize(out)/1e6:.1f} MB). Open it directly, or `serve` to record interactions.")
@@ -538,7 +562,7 @@ def cmd_rank(a):
         for line in open(a.labels, encoding="utf-8"):
             try: e = json.loads(line)
             except Exception: continue
-            if e.get("type") == "label": labels[e["key"]] = e["value"]
+            if e.get("type") in ("label", "seed"): labels[e["key"]] = e["value"]
             if e.get("type") == "compare": compares.append((e["a"], e["b"], e["win"]))
     capture_labelled(rows, labels)  # persist labelled jobs while they're in the slice, so they survive rebuilds
     X = np.stack([np.frombuffer(base64.b64decode(r[11]), dtype=np.float32) for r in rows]); keys = [f"{r[0]}/{r[1]}#{r[2]}" for r in rows]
@@ -669,7 +693,8 @@ def cmd_status(a):
     if os.path.exists(p):
         ev = [json.loads(l) for l in open(p, encoding="utf-8") if l.strip()]
         from collections import Counter
-        print("interactions:", dict(Counter(e.get("type") for e in ev)), "| yes:", sum(1 for e in ev if e.get("type") == "label" and e.get("value") == 1), "no:", sum(1 for e in ev if e.get("type") == "label" and e.get("value") == 0))
+        label_events = [e for e in ev if e.get("type") in ("label", "seed")]
+        print("interactions:", dict(Counter(e.get("type") for e in ev)), "| yes:", sum(1 for e in label_events if e.get("value") == 1), "no:", sum(1 for e in label_events if e.get("value") == 0))
 
 TEMPLATE = open(os.path.join(os.path.dirname(__file__), "search.html"), encoding="utf-8").read()
 

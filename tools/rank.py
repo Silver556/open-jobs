@@ -64,7 +64,7 @@ ideal = json.load(open(os.path.join(WORK, "ideal.json"), encoding="utf-8"))
 ideal_text = open(ideal["source"], encoding="utf-8").read() if os.path.exists(ideal.get("source", "")) else ""
 mp = os.path.join(WORK, "model.json")
 if os.path.exists(mp):
-    m = json.load(open(mp, encoding="utf-8")); w = np.asarray(m.get("taste") or m["w"], dtype=np.float32)
+    m = json.load(open(mp, encoding="utf-8")); w = np.asarray(m["w"], dtype=np.float32)
     X = np.stack([np.frombuffer(base64.b64decode(r[9]), dtype=np.float32) for r in rows])
     if m.get("space") == "centered" and m.get("mean"):  # the page fits in locally-centered space; reproduce it
         X = X - np.asarray(m["mean"], dtype=np.float32); X /= np.linalg.norm(X, axis=1, keepdims=True) + 1e-9
@@ -81,7 +81,7 @@ if os.path.exists(mp):
             for c, i in enumerate(ids): S[i, c] = -1  # a job is not its own neighbour
             return np.maximum(S.max(axis=1), 0)
         base = base + float(knn.get("lambda", 1.0)) * (maxcos(knn.get("yes", [])) - maxcos(knn.get("no", [])))
-    print(f"base order: taste model from work/model.json" + (f" (+ kNN term, λ={knn.get('lambda')}, {len(knn.get('yes', []))} yes / {len(knn.get('no', []))} no)" if knn else ""))
+    print(f"base order: refitted label/comparison model from work/model.json" + (f" (+ kNN term, λ={knn.get('lambda')}, {len(knn.get('yes', []))} yes / {len(knn.get('no', []))} no)" if knn else ""))
 else:
     base = np.asarray([r[8] for r in rows], dtype=np.float32); print("base order: similarity to the ideal JD")
     # raw cosine is a weak base order: widen the region where the judge is consulted unless the user set it
@@ -134,10 +134,13 @@ if a.agent and os.path.exists(answers_path) and os.path.exists(pairs_json):
     print(f"ingested {n_in} agent answers from work/rank-answers.json ({len(cache)} cached total)")
 SCHEMA = {"type": "object", "additionalProperties": False, "required": ["winner", "confidence", "why"],
           "properties": {"winner": {"type": "string", "enum": ["A", "B"]}, "confidence": {"type": "number"}, "why": {"type": "string"}}}
+guidance_path = os.path.join(WORK, "rank-preferences.md")
+local_guidance = open(guidance_path, encoding="utf-8").read().strip() if os.path.exists(guidance_path) else ""
 INSTR = ("You are helping one specific person find the job they want. You will be given their ideal job description, "
          "then two real postings A and B. Decide which single posting is the better match for THIS person: role, seniority, "
          "the work itself, stack, arrangement/location, compensation if stated, company type. Ignore posting length and "
-         "polish. If genuinely equal, pick the one whose day-to-day work is closer to the ideal. Answer with strict JSON.")
+         "polish. If genuinely equal, pick the one whose day-to-day work is closer to the ideal. "
+         "Answer with strict JSON." + ("\n\nLocal ranking guidance:\n" + local_guidance if local_guidance else ""))
 def card(r):
     return f"Title: {r[3]}\nCompany: {r[4]}\nLocation: {r[5]}\nPosting:\n{(r[7] or '')[:a.excerpt]}"
 def llm_compare(x, y):
@@ -230,6 +233,8 @@ if a.agent and needed:
     asked = {}; md = ["# Pairs to judge\n", "For each pair, decide which posting is the better match for THIS person's ideal job description: role, seniority, the work itself, stack, arrangement/location, compensation if stated, company type. Ignore posting length and polish. If genuinely equal, pick the one whose day-to-day work is closer to the ideal.\n",
                       f"Write `work/rank-answers.json` as `{{\"<pair id>\": {{\"winner\": \"A\"|\"B\", \"confidence\": 0-1, \"why\": \"one sentence\"}}}}` for every pair below, then re-run `uv run tools/rank.py --agent --top {a.top}`.\n",
                       "## Ideal job description\n", ideal_text[:4000], "\n"]
+    if local_guidance:
+        md.extend(["## Local ranking guidance\n", local_guidance, "\n"])
     shown = {}  # key -> short ref; a posting is printed in full the first time only
     def ref(r):
         k = key(r)

@@ -252,7 +252,7 @@ aside .clear{width:100%;margin-top:10px}
 <div id="toast"><i></i><span id="toasttxt"></span></div>
 
 <script>
-const JOBS=__JOBS__, IDEAL=__IDEAL__, IDEAL_TEXT=__IDEAL_TEXT__, GROUPS=__GROUPS__, GROUPS3=__GROUPS3__, PREF=__PREF__;
+const JOBS=__JOBS__, IDEAL=__IDEAL__, IDEAL_TEXT=__IDEAL_TEXT__, GROUPS=__GROUPS__, GROUPS3=__GROUPS3__, PREF=__PREF__, INITIAL_LABELS=__INITIAL_LABELS__;
 const $=s=>document.querySelector(s);
 function b64f32(s){const b=atob(s),u=new Uint8Array(b.length);for(let i=0;i<b.length;i++)u[i]=b.charCodeAt(i);return new Float32Array(u.buffer)}
 function norm(v){let s=0;for(const x of v)s+=x*x;s=Math.sqrt(s)||1;return Float32Array.from(v,x=>x/s)}
@@ -263,7 +263,7 @@ function jdText(t){return String(t||'').replace(/&(#x?[0-9a-f]+|[a-z]+);/gi,(m,e
 const ideal=norm(IDEAL.vector);
 const TITLE_TERMS=(IDEAL.title||'').toLowerCase().split(/[^a-z0-9+#]+/).filter(t=>t.length>2&&!['and','the','engineer','senior','software'].includes(t));
 function titleFit(j){if(!TITLE_TERMS.length)return 0;const t=(j.t||'').toLowerCase();let n=0;for(const w of TITLE_TERMS)if(t.includes(w))n++;return 0.03*n}
-for(const j of JOBS){j.vec=b64f32(j.v);delete j.v;j.pre=j.sim+titleFit(j);j.score=j.pre}
+for(const j of JOBS){j.vec=b64f32(j.v);delete j.v;j.pre=j.refit??(j.sim+titleFit(j));j.score=j.pre}
 // local centering: this slice is a narrow cone around the ideal JD (every posting shares a big common component),
 // so cosines are compressed into a thin high band. Subtracting the slice mean and renormalizing spreads the
 // differences the taste model and neighbours actually care about (benchmarked: +0.5-1 AUC point, never worse).
@@ -277,7 +277,9 @@ function updatePrior(){const P=JOBS.filter(j=>st.labels[j.k]===1),N=JOBS.filter(
 // ---- state
 const LS='open-jobs:'+(IDEAL.title||'')+':'+JOBS.length;
 let st={labels:{},notes:{},opened:{},enrich:{},companies:{},hideCo:{}};try{st=Object.assign(st,JSON.parse(localStorage.getItem(LS)||'{}'))}catch{}
-if(new URLSearchParams(location.search).get('reset')==='1'){st.labels={};st.notes={};st.opened={};st.compares=[];st.exclGroups=[];st.kw={t:{},b:{}};st.hideCo={};try{localStorage.setItem(LS,JSON.stringify(st))}catch{};history.replaceState(null,'',location.pathname)}
+let hadLocalFeedback=Object.keys(st.labels||{}).length>0||(st.compares||[]).length>0;
+st.labels=Object.assign({},INITIAL_LABELS,st.labels||{});
+if(new URLSearchParams(location.search).get('reset')==='1'){st.labels={};st.notes={};st.opened={};st.compares=[];st.exclGroups=[];st.kw={t:{},b:{}};st.hideCo={};hadLocalFeedback=false;try{localStorage.setItem(LS,JSON.stringify(st))}catch{};history.replaceState(null,'',location.pathname)}
 function save(){try{localStorage.setItem(LS,JSON.stringify(st))}catch{}}
 function event(e){e.ts=Date.now();try{fetch('/event',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(e)}).catch(()=>{})}catch{}}
 // ---- one taste model. Evidence: pairwise comparisons (Bradley-Terry: P(a>b)=σ(u·(va−vb))) and yes/no labels
@@ -526,5 +528,5 @@ $('#helpbtn').onclick=()=>$('#help').classList.add('on');$('#helpclose').onclick
 $('#filtersbtn').onclick=()=>document.body.classList.toggle('filters');$('#closef').onclick=()=>document.body.classList.remove('filters');
 for(const m of ['#cmp','#help'])$(m).addEventListener('click',e=>{if(e.target===$(m)){$(m).classList.remove('on')}});
 $('#brand-title').textContent=IDEAL.title?'· '+IDEAL.title:'';
-st.enrich=st.enrich||{};st.companies=st.companies||{};applyEnrich();fitAll();rebuildFacets();renderFacets();render();event({type:'session',jobs:JOBS.length,title:IDEAL.title,compares:st.compares.length});
+st.enrich=st.enrich||{};st.companies=st.companies||{};applyEnrich();fitAll();if(!hadLocalFeedback)for(const j of JOBS)if(j.refit!=null)j.score=j.refit;rebuildFacets();renderFacets();render();event({type:'session',jobs:JOBS.length,title:IDEAL.title,compares:st.compares.length});
 </script></body></html>

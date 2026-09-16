@@ -128,6 +128,9 @@ EL = [
     ("Remote, Panama", "Philadelphia, PA", "", False),
     ("Remote, US", "Remote - US", "", True),
     ("Remote, US", "Remote (US: PST or EST)", "", True),
+    ("Remote, US or Boise, ID", "Dallas, TX; Remote, US", "This role offers flexible remote/hybrid work. Our predominantly remote workforce operates across the country.", True),
+    ("Remote, US or Boise, ID", "Remote, USA", "This remote role is available only to candidates residing in the following states: California, Oregon, and Washington.", False),
+    ("Remote, US or Boise, ID", "Remote, USA", "Remote candidates may work from any US state except Idaho and Alaska.", False),
     # compound OR preferences: local on-site area OR countrywide remote
     ("Austin, TX or Remote, US", "Austin, TX", "", True),
     ("Austin, TX or Remote, US", "Dallas, TX", "", True),          # same state counts as the local area (v1)
