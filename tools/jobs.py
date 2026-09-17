@@ -226,7 +226,19 @@ def load_jobs():
     p = os.path.join(WORK, "jobs.parquet")
     if not os.path.exists(p): sys.exit("no work/jobs.parquet — run `fetch` first")
     rows = duckdb.connect().execute(f"SELECT * FROM read_parquet('{p}') ORDER BY sim DESC").fetchall()
-    return dedup_rows(rows)
+    rows = dedup_rows(rows)
+    # Local review decisions are not taste labels: a closed or previously assessed
+    # posting should disappear without teaching the model that its role is a bad fit.
+    status_path = os.path.join(WORK, "review-status.jsonl")
+    statuses = {}
+    if os.path.exists(status_path):
+        for line in open(status_path, encoding="utf-8"):
+            try:
+                event = json.loads(line)
+                statuses[event["key"]] = event["status"]
+            except (ValueError, KeyError, TypeError):
+                continue
+    return [r for r in rows if statuses.get(f"{r[0]}/{r[1]}#{r[2]}") not in ("closed", "assessed")]
 
 # --- Labelled-job persistence -------------------------------------------------
 # Your yes/no labels live in interactions.jsonl, but a label is only *useful* while the job it points
